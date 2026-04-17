@@ -1,15 +1,20 @@
 """
-Document ingestion: parse → chunk → embed → upsert into Qdrant.
+Document ingestion: parse → clean → chunk → embed → upsert into Qdrant.
+Uses Unstructured for layout-aware parsing and chunking.
 """
 
 import os
+import re
 import uuid
+import io
 import logging
 from typing import List, Dict, Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
 from sentence_transformers import SentenceTransformer
+from unstructured.partition.auto import partition
+from unstructured.chunking.basic import chunk_elements
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -40,99 +45,172 @@ def _get_embedder() -> SentenceTransformer:
     return _embedder
 
 
-# ──────────────────── Document Parsing ────────────────────
-def _parse_pdf(content: bytes) -> str:
-    from pypdf import PdfReader
-    import io
+# ──────────────────── Document Parsing (Unstructured) ────────────────────
+def _parse_with_unstructured(filename: str, content: bytes, ext: str) -> List[str]:
+    """Parse document using Unstructured to extract elements."""
+    logger.info(f"[ingest] Parsing {filename} with Unstructured")
 
-    reader = PdfReader(io.BytesIO(content))
-    text = ""
-    for page in reader.pages:
-        text += (page.extract_text() or "") + "\n"
-    return text
+    file_obj = io.BytesIO(content)
+    file_obj.name = filename
 
-
-def _parse_docx(content: bytes) -> str:
-    from docx import Document
-    import io
-
-    doc = Document(io.BytesIO(content))
-    return "\n".join(para.text for para in doc.paragraphs)
+    try:
+        elements = partition(file=file_obj, filename=filename)
+        logger.info(f"[ingest] Unstructured found {len(elements)} elements")
+        return elements
+    except Exception as e:
+        logger.warning(f"[ingest] Unstructured failed: {e}, falling back to basic parser")
+        raise
 
 
-def _parse_text(content: bytes) -> str:
-    return content.decode("utf-8", errors="replace")
+# ──────────────────── Cleaning / Normalization ────────────────────
+def _clean_text(text: str) -> str:
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+
+    cleaned = text
+
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
+    cleaned = cleaned.strip()
+
+    return cleaned
 
 
-def parse_document(filename: str, content: bytes, ext: str) -> str:
-    """Parse document content to plain text."""
-    parsers = {
-        ".pdf": _parse_pdf,
-        ".docx": _parse_docx,
-        ".txt": _parse_text,
-        ".md": _parse_text,
-    }
-    parser = parsers.get(ext)
-    if not parser:
-        raise ValueError(f"Unsupported format: {ext}")
-    return parser(content)
+def _clean_elements(elements: List) -> List[str]:
+    """Clean unstructured elements and extract text."""
+    cleaned_texts = []
+
+    for elem in elements:
+        text = str(elem).strip()
+        if not text:
+            continue
+
+        text = _clean_text(text)
+
+        if len(text) < 10:
+            continue
+
+        cleaned_texts.append(text)
+
+    return cleaned_texts
 
 
-# ──────────────────── Chunking ────────────────────
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    """Split text into overlapping chunks."""
-    words = text.split()
-    chunks = []
-    i = 0
-    while i < len(words):
-        chunk = " ".join(words[i : i + chunk_size])
-        if chunk.strip():
-            chunks.append(chunk.strip())
-        i += chunk_size - overlap
+# ──────────────────── Chunking (Unstructured + Fallback) ────────────────────
+def _chunk_with_unstructured(texts: List[str]) -> List[str]:
+    """Chunk text elements using Unstructured's chunker."""
+    try:
+        from unstructured.documents.elements import Text
+        elements = [Text(text=t) for t in texts if t]
+        chunks = chunk_elements(elements, max_characters=CHUNK_SIZE)
+        return [str(c) for c in chunks]
+    except Exception as e:
+        logger.warning(f"[ingest] Unstructured chunking failed: {e}")
+        raise
+
+
+def _chunk_fallback(texts: List[str]) -> List[str]:
+    """Fallback: simple word-based chunking."""
+    all_chunks = []
+
+    for text in texts:
+        words = text.split()
+        i = 0
+        while i < len(words):
+            chunk = " ".join(words[i : i + CHUNK_SIZE])
+            if chunk.strip():
+                all_chunks.append(chunk.strip())
+            i += CHUNK_SIZE - CHUNK_OVERLAP
+
+    return all_chunks
+
+
+def chunk_text(texts: List[str]) -> List[str]:
+    """Main chunking function: try Unstructured, fallback to simple."""
+    if not texts:
+        return []
+
+    try:
+        chunks = _chunk_with_unstructured(texts)
+        if chunks:
+            logger.info(f"[ingest] Unstructured chunking: {len(chunks)} chunks")
+            return chunks
+    except Exception as e:
+        logger.warning(f"[ingest] Chunking failed, using fallback: {e}")
+
+    chunks = _chunk_fallback(texts)
+    logger.info(f"[ingest] Fallback chunking: {len(chunks)} chunks")
     return chunks
+
+
+# ──────────────────── Backward Compatibility ────────────────────
+def parse_document(filename: str, content: bytes, ext: str) -> str:
+    """Parse single document to plain text (legacy interface)."""
+    elements = _parse_with_unstructured(filename, content, ext)
+    cleaned = _clean_elements(elements)
+    return "\n\n".join(cleaned)
 
 
 # ──────────────────── Ingest Pipeline ────────────────────
 async def ingest_document(filename: str, content: bytes, ext: str) -> Dict[str, Any]:
-    """Full ingestion: parse, chunk, embed, upsert."""
+    """Full ingestion: parse, clean, chunk, embed, upsert."""
     logger.info(f"[ingest] Starting ingestion for: {filename} (ext: {ext})")
 
-    # Parse
-    logger.info("[ingest] Step 1: Parse document")
+    # Step 1: Parse with Unstructured
+    logger.info("[ingest] Step 1: Parse document (Unstructured)")
     try:
-        text = parse_document(filename, content, ext)
+        elements = _parse_with_unstructured(filename, content, ext)
     except Exception as e:
         logger.error(f"[ingest] Parse failed: {e}")
         raise
-    if not text.strip():
-        logger.error("[ingest] Document is empty after parsing")
-        raise ValueError("Document is empty or could not be parsed")
-    logger.info(f"[ingest] Parsed text length: {len(text)} chars")
 
-    # Chunk
-    logger.info("[ingest] Step 2: Chunk text")
+    if not elements:
+        logger.error("[ingest] No elements extracted")
+        raise ValueError("Document could not be parsed")
+
+    logger.info(f"[ingest] Extracted {len(elements)} elements")
+
+    # Step 2: Clean elements
+    logger.info("[ingest] Step 2: Clean elements")
     try:
-        chunks = chunk_text(text)
+        cleaned_texts = _clean_elements(elements)
+    except Exception as e:
+        logger.error(f"[ingest] Cleaning failed: {e}")
+        raise
+
+    if not cleaned_texts:
+        logger.error("[ingest] No text after cleaning")
+        raise ValueError("Document is empty after cleaning")
+
+    logger.info(f"[ingest] Cleaned {len(cleaned_texts)} text blocks")
+
+    # Step 3: Chunk text
+    logger.info("[ingest] Step 3: Chunk text")
+    try:
+        chunks = chunk_text(cleaned_texts)
     except Exception as e:
         logger.error(f"[ingest] Chunking failed: {e}")
         raise
+
     if not chunks:
         logger.error("[ingest] No chunks produced")
         raise ValueError("No chunks produced from document")
+
     logger.info(f"[ingest] Produced {len(chunks)} chunks")
 
-    # Embed
-    logger.info("[ingest] Step 3: Generate embeddings")
+    # Step 4: Generate embeddings
+    logger.info("[ingest] Step 4: Generate embeddings")
     try:
         embedder = _get_embedder()
         embeddings = embedder.encode(chunks, show_progress_bar=False, normalize_embeddings=True)
     except Exception as e:
         logger.error(f"[ingest] Embedding failed: {e}")
         raise
+
     logger.info(f"[ingest] Generated {len(embeddings)} embeddings, dim: {embeddings.shape[1]}")
 
-    # Upsert to Qdrant
-    logger.info("[ingest] Step 4: Upsert to Qdrant")
+    # Step 5: Upsert to Qdrant
+    logger.info("[ingest] Step 5: Upsert to Qdrant")
     try:
         client = _get_qdrant()
     except Exception as e:
@@ -155,7 +233,6 @@ async def ingest_document(filename: str, content: bytes, ext: str) -> Dict[str, 
             )
         )
 
-    # Batch upsert (100 at a time)
     batch_size = 100
     for i in range(0, len(points), batch_size):
         try:
@@ -165,10 +242,12 @@ async def ingest_document(filename: str, content: bytes, ext: str) -> Dict[str, 
             logger.error(f"[ingest] Batch upsert failed (batch {i//batch_size + 1}): {e}")
             raise
 
-    logger.info(f"[ingest] Complete: {filename} ({len(chunks)} chunks, {len(text)} chars)")
+    total_chars = sum(len(c) for c in chunks)
+    logger.info(f"[ingest] Complete: {filename} ({len(chunks)} chunks, {total_chars} chars)")
+
     return {
         "document_name": filename,
         "chunks": len(chunks),
-        "characters": len(text),
+        "characters": total_chars,
         "status": "ready",
     }
