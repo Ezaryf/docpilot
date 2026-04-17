@@ -67,11 +67,18 @@ def _has_lexical_overlap(query: str, document_text: str) -> bool:
 async def grade_relevance(
     query: str,
     document_text: str,
+    rerank_score: float | None = None,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
 ) -> bool:
     """Grade whether a document chunk is relevant to the query."""
     logger.debug(f"[grade_relevance] Grading document for query: {query[:60]}")
+
+    # Use rerank_score threshold if available (high reranker score = more relevant)
+    # ms-marco-MiniLM-L-6-v2 scores: typically -10 to +10 range
+    if rerank_score is not None and rerank_score > 2.0:
+        logger.debug(f"[grade_relevance] Accepted via rerank_score={rerank_score:.2f}")
+        return True
 
     # Cheap lexical fallback keeps broad "summarize my uploaded docs" style queries
     # from being rejected when the LLM grader is overly strict.
@@ -121,10 +128,12 @@ async def grade_documents(
 
     for i, doc in enumerate(documents):
         logger.debug(f"[grade_documents] Grading document {i+1}/{len(documents)}")
+        rerank_score = doc.get("rerank_score")
         try:
             is_relevant = await grade_relevance(
                 query,
                 doc["text"],
+                rerank_score=rerank_score,
                 groq_api_key=groq_api_key,
                 llm_model=llm_model,
             )

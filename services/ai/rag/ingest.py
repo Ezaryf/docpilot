@@ -41,8 +41,6 @@ def _get_embedder() -> SentenceTransformer:
 
 
 # ──────────────────── Document Parsing ────────────────────
-
-
 def _parse_pdf(content: bytes) -> str:
     from pypdf import PdfReader
     import io
@@ -81,8 +79,6 @@ def parse_document(filename: str, content: bytes, ext: str) -> str:
 
 
 # ──────────────────── Chunking ────────────────────
-
-
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
     """Split text into overlapping chunks."""
     words = text.split()
@@ -97,8 +93,6 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
 
 
 # ──────────────────── Ingest Pipeline ────────────────────
-
-
 async def ingest_document(filename: str, content: bytes, ext: str) -> Dict[str, Any]:
     """Full ingestion: parse, chunk, embed, upsert."""
     logger.info(f"[ingest] Starting ingestion for: {filename} (ext: {ext})")

@@ -3,10 +3,10 @@ LangGraph Agentic RAG Pipeline
 
 Flow:
   START → route_query → [needs_retrieval?]
-                          ├─ YES → retrieve → grade → [relevant?]
-                          │                             ├─ YES → generate → cite → END
-                          │                             └─ NO → rewrite → retrieve (loop, max 2)
-                          └─ NO → direct_answer → END
+                        ├─ YES → retrieve → rerank → grade → [relevant?]
+                        │                                     ├─ YES → generate → cite → END
+                        │                                     └─ NO → rewrite → retrieve (loop, max 2)
+                        └─ NO → direct_answer → END
 """
 
 import time
@@ -16,6 +16,7 @@ from typing import TypedDict, AsyncGenerator, Any
 from rag.retrieve import search_documents
 from rag.grade import grade_documents
 from rag.rewrite import rewrite_query
+from rag.rerank import rerank_documents
 from rag.generate import generate_answer, generate_direct_answer
 from rag.citations import extract_citations
 from rag.llm import create_groq_llm
@@ -24,8 +25,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ──────────────────── State ────────────────────
-
-
 class RAGState(TypedDict):
     query: str
     original_query: str
@@ -40,8 +39,6 @@ class RAGState(TypedDict):
 
 
 # ──────────────────── Router ────────────────────
-
-
 async def _route_query(
     query: str,
     groq_api_key: str | None = None,
@@ -102,8 +99,6 @@ def _looks_like_direct_chat(query: str) -> bool:
 
 
 # ──────────────────── Pipeline ────────────────────
-
-
 async def run_rag_pipeline(
     query: str,
     session_id: str,
@@ -173,7 +168,7 @@ async def run_rag_pipeline(
         try:
             documents = await search_documents(
                 current_query,
-                top_k=5,
+                top_k=10,
                 document_names=document_names,
             )
         except Exception as e:
@@ -195,12 +190,32 @@ async def run_rag_pipeline(
         logger.info(f"[pipeline] Retrieve found {len(documents)} documents")
 
         if not documents:
+            trace.append({"step": "rerank", "detail": "No documents found"})
             trace.append({"step": "grade", "detail": "No documents found"})
             break
 
-        # ── Step 3: Grade ──
+        # ── Step 3: Rerank ──
+        t_rerank = time.time()
+        logger.info(f"[pipeline] Step 3: Rerank {len(documents)} documents")
+        try:
+            documents = await rerank_documents(
+                current_query,
+                documents,
+                top_k=5,
+            )
+        except Exception as e:
+            logger.error(f"[pipeline] Rerank failed: {e}")
+            pass
+        trace.append({
+            "step": "rerank",
+            "detail": f"Reranked to top 5 from initial 10",
+            "duration_ms": round((time.time() - t_rerank) * 1000),
+        })
+        logger.info(f"[pipeline] Rerank complete, {len(documents)} documents remain")
+
+        # ── Step 4: Grade ──
         t_grade = time.time()
-        logger.info(f"[pipeline] Step 3: Grade {len(documents)} documents")
+        logger.info(f"[pipeline] Step 4: Grade {len(documents)} documents")
         try:
             relevant_docs, irrelevant = await grade_documents(
                 current_query,
@@ -221,10 +236,10 @@ async def run_rag_pipeline(
         if relevant_docs:
             break  # We have good results
 
-        # ── Step 4: Rewrite (if needed) ──
+        # ── Step 5: Rewrite (if needed) ──
         if rewrite_count < max_rewrites:
             t_rewrite = time.time()
-            logger.info(f"[pipeline] Step 4: Rewrite query (attempt {rewrite_count + 1})")
+            logger.info(f"[pipeline] Step 5: Rewrite query (attempt {rewrite_count + 1})")
             try:
                 current_query = await rewrite_query(
                     current_query,
@@ -247,8 +262,8 @@ async def run_rag_pipeline(
     # Emit trace before generation
     yield {"type": "trace", "trace": trace}
 
-    # ── Step 5: Generate ──
-    logger.info(f"[pipeline] Step 5: Generate answer with {len(relevant_docs)} documents")
+    # ── Step 6: Generate ──
+    logger.info(f"[pipeline] Step 6: Generate answer with {len(relevant_docs)} documents")
     full_answer = ""
     try:
         async for token in generate_answer(
@@ -264,8 +279,8 @@ async def run_rag_pipeline(
         raise
     logger.info(f"[pipeline] Generate complete, length: {len(full_answer)} chars")
 
-    # ── Step 6: Citations ──
-    logger.info("[pipeline] Step 6: Extract citations")
+    # ── Step 7: Citations ──
+    logger.info("[pipeline] Step 7: Extract citations")
     try:
         citations = extract_citations(full_answer, relevant_docs)
     except Exception as e:

@@ -1,7 +1,3 @@
-"""
-Retrieval layer: hybrid search via Qdrant (dense vectors).
-"""
-
 import os
 import logging
 from typing import List, Dict, Any
@@ -31,20 +27,17 @@ EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 _qdrant: QdrantClient | None = None
 _embedder: SentenceTransformer | None = None
 
-
 def _get_qdrant() -> QdrantClient:
     global _qdrant
     if _qdrant is None:
         _qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
     return _qdrant
 
-
 def _get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
         _embedder = SentenceTransformer(EMBED_MODEL)
     return _embedder
-
 
 async def ensure_collection():
     """Create the Qdrant collection if it doesn't exist."""
@@ -76,7 +69,6 @@ async def ensure_collection():
         except Exception as e:
             logger.info(f"Index may already exist: {e}")
 
-
 def _build_document_filter(document_names: list[str]) -> Filter | None:
     clean_names = [name for name in document_names if name.strip()]
     if not clean_names:
@@ -91,7 +83,6 @@ def _build_document_filter(document_names: list[str]) -> Filter | None:
             for name in clean_names
         ]
     )
-
 
 async def search_documents(
     query: str,
@@ -160,7 +151,6 @@ async def search_documents(
     logger.info(f"[retrieve] Parsed {len(docs)} documents")
     return docs
 
-
 async def list_indexed_documents() -> List[Dict[str, Any]]:
     """List unique documents in the collection."""
     client = _get_qdrant()
@@ -185,7 +175,6 @@ async def list_indexed_documents() -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-
 async def get_collection_info() -> Dict[str, Any]:
     """Get collection stats."""
     client = _get_qdrant()
@@ -198,7 +187,6 @@ async def get_collection_info() -> Dict[str, Any]:
         }
     except Exception:
         return {"name": COLLECTION, "points_count": 0, "vectors_count": 0}
-
 
 async def delete_document(document_name: str) -> bool:
     """Delete all chunks belonging to a document from Qdrant."""
