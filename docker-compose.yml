@@ -1,0 +1,23 @@
+services:
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - AI_SERVICE_URL=http://ai:8000
+      - NEXT_PUBLIC_AI_SERVICE_URL=http://localhost:8000
+    depends_on:
+      - ai
+
+  ai:
+    build:
+      context: ./services/ai
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./services/ai/.env
+    volumes:
+      - ./services/ai:/app
