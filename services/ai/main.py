@@ -182,74 +182,48 @@ async def delete_document(document_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ──────────────────── Evaluation ────────────────────
+# ──────────────────── Evaluation (Ragas) ────────────────────
 
 
 @app.post("/api/eval")
-async def run_evaluation():
-    """Run evaluation queries and return metrics."""
+async def run_evaluation(request: dict):
+    """
+    Run Ragas evaluation on RAG pipeline.
+
+    Request body:
+    {
+        "question": "What is X?",
+        "answer": "Generated answer",
+        "contexts": ["context1", "context2"],
+        "ground_truth": "Expected answer (optional)"
+    }
+    """
+    from rag.eval import evaluate_rag
     from rag.retrieve import get_collection_info
+
+    question = request.get("question", "")
+    answer = request.get("answer", "")
+    contexts = request.get("contexts", [])
+    ground_truth = request.get("ground_truth")
+
+    if not question or not answer:
+        return {"error": "question and answer required"}
 
     info = await get_collection_info()
     if info["points_count"] == 0:
-        return {
-            "results": [],
-            "metrics": {
-                "hit_at_5": 0,
-                "avg_latency_ms": 0,
-                "citation_coverage": 0,
-                "groundedness": 0,
-            },
-        }
+        return {"error": "No documents indexed"}
 
-    # Run sample queries through the pipeline and measure
-    eval_queries = [
-        "What is the main topic of the uploaded documents?",
-        "Summarize the key findings",
-        "What methodology was used?",
-        "What are the conclusions?",
-        "List the important metrics mentioned",
-    ]
-
-    results = []
-    import time
-
-    for query in eval_queries:
-        start = time.time()
-        full_response = ""
-        citations_list = []
-        trace_list = []
-        rewritten = False
-
-        async for event in run_rag_pipeline(query, "eval"):
-            if event.get("type") == "token":
-                full_response += event["content"]
-            elif event.get("type") == "citations":
-                citations_list = event["citations"]
-            elif event.get("type") == "trace":
-                trace_list = event["trace"]
-                rewritten = any(s["step"] == "query_rewrite" for s in trace_list)
-
-        elapsed = (time.time() - start) * 1000
-        results.append({
-            "query": query,
-            "relevant": bool(citations_list),
-            "rewritten": rewritten,
-            "latency_ms": elapsed,
-            "citations": len(citations_list),
-            "score": min(1.0, len(citations_list) / 3) if citations_list else 0.2,
-        })
-
-    # Aggregate metrics
-    n = len(results)
-    m = {
-        "hit_at_5": sum(1 for r in results if r["relevant"]) / n if n else 0,
-        "avg_latency_ms": sum(r["latency_ms"] for r in results) / n if n else 0,
-        "citation_coverage": sum(1 for r in results if r["citations"] > 0) / n if n else 0,
-        "groundedness": sum(r["score"] for r in results) / n if n else 0,
-    }
-
-    return {"results": results, "metrics": m}
+    try:
+        results = await evaluate_rag(
+            question=question,
+            answer=answer,
+            contexts=contexts,
+            ground_truth=ground_truth,
+        )
+        return {"results": results, "status": "success"}
+    except Exception as e:
+        logger.error(f"[eval] Failed: {e}")
+        return {"error": str(e)}
 
 
 # ──────────────────── Startup ────────────────────
