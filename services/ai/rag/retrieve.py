@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from typing import List, Dict, Any
 
@@ -26,6 +27,10 @@ EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
 _qdrant: QdrantClient | None = None
 _embedder: SentenceTransformer | None = None
+
+# Hybrid search config
+HYBRID_USE = os.getenv("HYBRID_SEARCH", "false").lower() == "true"
+HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.5"))
 
 def _get_qdrant() -> QdrantClient:
     global _qdrant
@@ -150,6 +155,146 @@ async def search_documents(
         )
     logger.info(f"[retrieve] Parsed {len(docs)} documents")
     return docs
+
+
+def _tokenize(text: str) -> List[str]:
+    """Simple tokenizer for keyword search."""
+    text = text.lower()
+    tokens = re.findall(r"[a-z0-9]+", text)
+    return [t for t in tokens if len(t) > 2]
+
+
+async def search_hybrid(
+    query: str,
+    top_k: int = 5,
+    document_names: list[str] | None = None,
+    alpha: float = HYBRID_ALPHA,
+) -> List[Dict[str, Any]]:
+    """
+    Hybrid search: combines dense (semantic) + sparse (keyword) using RRF.
+
+    Args:
+        query: User query
+        top_k: Number of results
+        document_names: Filter by document names
+        alpha: Weighted average (0 = dense only, 1 = sparse only)
+
+    Returns:
+        List of documents with combined scores
+    """
+    if not HYBRID_USE:
+        return await search_documents(query, top_k, document_names)
+
+    logger.info(f"[hybrid] Starting hybrid search for: {query[:60]} (alpha={alpha})")
+
+    client = _get_qdrant()
+    document_filter = _build_document_filter(document_names or [])
+
+    try:
+        dense_query = _get_embedder().encode(query, normalize_embeddings=True).tolist()
+    except Exception as e:
+        logger.error(f"[hybrid] Embedding failed: {e}")
+        return await search_documents(query, top_k, document_names)
+
+    query_tokens = _tokenize(query)
+
+    try:
+        dense_response = client.query_points(
+            collection_name=COLLECTION,
+            query=dense_query,
+            limit=top_k * 3,
+            with_payload=True,
+            query_filter=document_filter,
+        )
+        dense_docs = {
+            str(p.id): p.score for p in dense_response.points
+        }
+    except Exception as e:
+        logger.warning(f"[hybrid] Dense search failed: {e}")
+        dense_docs = {}
+
+    sparse_scores = {}
+    if query_tokens:
+        try:
+            all_records, _ = client.scroll(
+                collection_name=COLLECTION,
+                limit=1000,
+                with_payload=True,
+            )
+            for record in all_records:
+                if document_filter:
+                    doc_name = (record.payload or {}).get("document_name", "")
+                    if doc_name not in (document_names or []) and document_names:
+                        continue
+
+                record_tokens = _tokenize(record.payload.get("text", "") if record.payload else "")
+                overlap = len(set(query_tokens) & set(record_tokens))
+                if overlap > 0:
+                    tf = overlap / max(1, len(record_tokens))
+                    idf = 1.0
+                    sparse_scores[str(record.id)] = tf * idf
+        except Exception as e:
+            logger.warning(f"[hybrid] Sparse search failed: {e}")
+
+    try:
+        sparse_response = client.query_points(
+            collection_name=COLLECTION,
+            query=[(t, 1.0) for t in query_tokens[:10]],
+            limit=top_k * 3,
+            with_payload=True,
+            query_filter=document_filter,
+        )
+        for p in sparse_response.points:
+            if str(p.id) in sparse_scores:
+                sparse_scores[str(p.id)] += p.score
+            else:
+                sparse_scores[str(p.id)] = p.score
+    except Exception as e:
+        logger.warning(f"[hybrid] Qdrant sparse search failed: {e}")
+
+    all_doc_ids = set(dense_docs.keys()) | set(sparse_scores.keys())
+
+    rrf_scores = {}
+    k = 1.0
+    for doc_id in all_doc_ids:
+        dense_rank = list(dense_docs.keys()).index(doc_id) + 1 if doc_id in dense_docs else top_k * 3 + 1
+        sparse_rank = sorted(sparse_scores.keys(), key=lambda x: sparse_scores.get(x, 0), reverse=True).index(doc_id) + 1 if doc_id in sparse_scores else top_k * 3 + 1
+
+        dense_score = dense_docs.get(doc_id, 0)
+        sparse_score = sparse_scores.get(doc_id, 0)
+        combined = alpha * sparse_score + (1 - alpha) * dense_score
+
+        rrf_scores[doc_id] = combined
+
+    sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)[:top_k]
+
+    try:
+        final_response = client.retrieve(
+            collection_name=COLLECTION,
+            ids=sorted_ids,
+            with_payload=True,
+        )
+        results = final_response
+    except Exception as e:
+        logger.error(f"[hybrid] Retrieve failed: {e}")
+        return await search_documents(query, top_k, document_names)
+
+    docs = []
+    for hit in results:
+        payload = hit.payload or {}
+        docs.append(
+            {
+                "id": str(hit.id),
+                "text": payload.get("text", ""),
+                "document_name": payload.get("document_name", "unknown"),
+                "chunk_index": payload.get("chunk_index", 0),
+                "score": rrf_scores.get(str(hit.id), 0),
+            }
+        )
+
+    logger.info(f"[hybrid] Returned {len(docs)} documents")
+    return docs
+
 
 async def list_indexed_documents() -> List[Dict[str, Any]]:
     """List unique documents in the collection."""

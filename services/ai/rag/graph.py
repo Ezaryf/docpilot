@@ -13,7 +13,7 @@ import time
 import logging
 from typing import TypedDict, AsyncGenerator, Any
 
-from rag.retrieve import search_documents
+from rag.retrieve import search_documents, search_hybrid, HYBRID_USE
 from rag.grade import grade_documents
 from rag.rewrite import rewrite_query
 from rag.rerank import rerank_documents
@@ -166,25 +166,24 @@ async def run_rag_pipeline(
         t_retrieve = time.time()
         logger.info(f"[pipeline] Retrieve attempt {rewrite_count + 1} for query: {current_query[:60]}")
         try:
-            documents = await search_documents(
-                current_query,
-                top_k=10,
-                document_names=document_names,
-            )
+            if HYBRID_USE:
+                documents = await search_hybrid(
+                    current_query,
+                    top_k=10,
+                    document_names=document_names,
+                )
+            else:
+                documents = await search_documents(
+                    current_query,
+                    top_k=10,
+                    document_names=document_names,
+                )
         except Exception as e:
             logger.error(f"[pipeline] Retrieve failed: {e}")
             raise
         trace.append({
             "step": "retrieve",
-            "detail": (
-                f"Found {len(documents)} chunks for: '{current_query[:60]}...'"
-                + (
-                    f" in {', '.join(document_names[:3])}"
-                    + ("..." if len(document_names) > 3 else "")
-                    if document_names
-                    else ""
-                )
-            ),
+            "detail": f"Found {len(documents)} chunks for: '{current_query[:60]}...'" + (" (hybrid)" if HYBRID_USE else ""),
             "duration_ms": round((time.time() - t_retrieve) * 1000),
         })
         logger.info(f"[pipeline] Retrieve found {len(documents)} documents")
