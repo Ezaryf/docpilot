@@ -73,33 +73,46 @@ export default function EvalPage() {
   const [results, setResults] = useState<EvalResult[]>([]);
   const [running, setRunning] = useState(false);
   const [liveMetrics, setLiveMetrics] = useState(metrics);
+  const [error, setError] = useState<string | null>(null);
 
   const runEval = async () => {
     setRunning(true);
+    setError(null);
     try {
       const AI_URL = process.env.NEXT_PUBLIC_AI_SERVICE_URL || "http://localhost:8000";
       const res = await fetch(`${AI_URL}/api/eval`, { method: "POST" });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.results) setResults(data.results);
-        if (data.metrics) {
-          setLiveMetrics((prev) =>
-            prev.map((m) => {
-              if (m.label === "Hit@5" && data.metrics.hit_at_5 !== undefined)
-                return { ...m, value: `${(data.metrics.hit_at_5 * 100).toFixed(1)}%` };
-              if (m.label === "Avg Latency" && data.metrics.avg_latency_ms !== undefined)
-                return { ...m, value: `${data.metrics.avg_latency_ms.toFixed(0)}ms` };
-              if (m.label === "Citation Coverage" && data.metrics.citation_coverage !== undefined)
-                return { ...m, value: `${(data.metrics.citation_coverage * 100).toFixed(1)}%` };
-              if (m.label === "Groundedness" && data.metrics.groundedness !== undefined)
-                return { ...m, value: `${(data.metrics.groundedness * 100).toFixed(1)}%` };
-              return m;
-            })
-          );
-        }
+
+      if (!res.ok) {
+        throw new Error(`Evaluation request failed with HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      if (!Array.isArray(data.results)) {
+        throw new Error("Evaluation response did not include results.");
+      }
+
+      setResults(data.results);
+      if (data.metrics) {
+        setLiveMetrics((prev) =>
+          prev.map((m) => {
+            if (m.label === "Hit@5" && data.metrics.hit_at_5 !== undefined)
+              return { ...m, value: `${(data.metrics.hit_at_5 * 100).toFixed(1)}%` };
+            if (m.label === "Avg Latency" && data.metrics.avg_latency_ms !== undefined)
+              return { ...m, value: `${data.metrics.avg_latency_ms.toFixed(0)}ms` };
+            if (m.label === "Citation Coverage" && data.metrics.citation_coverage !== undefined)
+              return { ...m, value: `${(data.metrics.citation_coverage * 100).toFixed(1)}%` };
+            if (m.label === "Groundedness" && data.metrics.groundedness !== undefined)
+              return { ...m, value: `${(data.metrics.groundedness * 100).toFixed(1)}%` };
+            return m;
+          })
+        );
       }
     } catch (err) {
       console.error("Eval failed:", err);
+      setError(err instanceof Error ? err.message : "Evaluation failed.");
     } finally {
       setRunning(false);
     }
@@ -159,7 +172,17 @@ export default function EvalPage() {
           </div>
 
           {/* Results Table */}
-          {results.length > 0 ? (
+          {error ? (
+            <div className="rounded-xl border border-error/30 bg-error/10 p-5">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-error mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-semibold text-error">Evaluation failed</h3>
+                  <p className="text-sm text-text-secondary mt-1">{error}</p>
+                </div>
+              </div>
+            </div>
+          ) : results.length > 0 ? (
             <div className="rounded-xl border border-border bg-surface overflow-hidden">
               <div className="px-5 py-3 border-b border-border">
                 <h3 className="text-sm font-semibold text-text-primary">

@@ -259,8 +259,9 @@ async def run_rag_pipeline(
         else:
             break
 
-    # Emit trace before generation
+    # Emit trace and final retrieval context before generation.
     yield {"type": "trace", "trace": trace}
+    yield {"type": "documents", "documents": relevant_docs}
 
     # ── Step 6: Generate ──
     logger.info(f"[pipeline] Step 6: Generate answer with {len(relevant_docs)} documents")

@@ -30,6 +30,8 @@ build/
 
 # Testing
 coverage/
+.pytest_cache/
+pytest-cache-files-*/
 
 # IDE
 .vscode/

@@ -7,7 +7,7 @@ import json
 import asyncio
 import uuid
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -203,28 +203,31 @@ async def delete_document(document_name: str):
 
 
 @app.post("/api/eval")
-async def run_evaluation(request: dict):
+async def run_evaluation(request: Optional[dict] = None):
     """
     Run Ragas evaluation on RAG pipeline.
-
-    Request body:
-    {
-        "question": "What is X?",
-        "answer": "Generated answer",
-        "contexts": ["context1", "context2"],
-        "ground_truth": "Expected answer (optional)"
-    }
+    If no body is provided, runs a batch evaluation on indexed documents.
     """
-    from rag.eval import evaluate_rag
+    from rag.eval import evaluate_rag, run_batch_evaluation
     from rag.retrieve import get_collection_info
 
+    # 1. Check if it's a batch request (no body)
+    if not request:
+        logger.info("[eval] Triggering batch evaluation")
+        try:
+            return await run_batch_evaluation(num_samples=3)
+        except Exception as e:
+            logger.error(f"[eval] Batch evaluation failed: {e}")
+            return {"error": str(e)}
+
+    # 2. Case: Single query evaluation
     question = request.get("question", "")
     answer = request.get("answer", "")
     contexts = request.get("contexts", [])
     ground_truth = request.get("ground_truth")
 
     if not question or not answer:
-        return {"error": "question and answer required"}
+        return {"error": "question and answer required for single evaluation"}
 
     info = await get_collection_info()
     if info["points_count"] == 0:
@@ -237,7 +240,17 @@ async def run_evaluation(request: dict):
             contexts=contexts,
             ground_truth=ground_truth,
         )
-        return {"results": results, "status": "success"}
+        return {
+            "results": [{
+                "query": question,
+                "score": sum(v[0] for v in results.values() if isinstance(v, list) and v) / len(results) if results else 0,
+                "latency_ms": 0,
+                "relevant": True,
+                "rewritten": False,
+                "citations": 0
+            }],
+            "status": "success"
+        }
     except Exception as e:
         logger.error(f"[eval] Failed: {e}")
         return {"error": str(e)}
