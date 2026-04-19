@@ -17,7 +17,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# Stage 14: Structured Monitoring
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_obj = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "module": record.module,
+        }
+        if hasattr(record, "extra"):
+            log_obj.update(record.extra)
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger(__name__)
 
 from rag.ingest import ingest_document
@@ -224,6 +241,29 @@ async def run_evaluation(request: dict):
     except Exception as e:
         logger.error(f"[eval] Failed: {e}")
         return {"error": str(e)}
+
+
+@app.get("/api/stats")
+async def get_stats():
+    """Stage 14: Metrics and stats endpoint."""
+    from rag.retrieve import get_collection_info, _retrieval_cache
+    try:
+        info = await get_collection_info()
+        return {
+            "status": "ok",
+            "qdrant": info,
+            "cache": {
+                "size": len(_retrieval_cache),
+                "items": list(_retrieval_cache.keys())[:10] # Show some keys
+            },
+            "environment": {
+                "hybrid_search": os.getenv("HYBRID_SEARCH", "false"),
+                "llm_model": os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+            }
+        }
+    except Exception as e:
+        logger.error(f"[stats] Failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # ──────────────────── Startup ────────────────────

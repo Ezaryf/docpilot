@@ -5,9 +5,14 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "bun run --cwd apps/web dev",
+    "dev": "bunx concurrently -n \"WEB,AI\" -c \"cyan,magenta\" \"bun run dev:web\" \"bun run dev:ai\"",
+    "dev:web": "bun run --cwd apps/web dev",
+    "dev:ai": "cd services/ai && python -m uvicorn main:app --reload --port 8000",
     "build": "bun run --cwd apps/web build",
     "start": "bun run --cwd apps/web start",
     "lint": "bun run --cwd apps/web lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

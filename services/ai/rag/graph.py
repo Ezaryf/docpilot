@@ -21,7 +21,7 @@ from rag.generate import generate_answer, generate_direct_answer
 from rag.citations import extract_citations
 from rag.llm import create_groq_llm
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ──────────────────── State ────────────────────
@@ -73,7 +73,7 @@ Decision:"""
         response = await llm.ainvoke(prompt)
         decision = response.content.strip().lower()
         result = "retrieve" in decision
-        logger.info(f"[route_query] Decision: {result}")
+        logger.info(f"[route_query] Decision made", extra={"decision": decision, "result": result})
         return result
     except Exception as e:
         logger.error(f"[route_query] Error: {e}")
@@ -135,12 +135,13 @@ async def run_rag_pipeline(
     except Exception as e:
         logger.error(f"[pipeline] Route failed: {e}")
         raise
+    duration_route = round((time.time() - t_route) * 1000)
     trace.append({
         "step": "route",
         "detail": f"{'retrieval' if needs_retrieval else 'direct'}",
-        "duration_ms": round((time.time() - t_route) * 1000),
+        "duration_ms": duration_route,
     })
-    logger.info(f"[pipeline] Route complete: needs_retrieval={needs_retrieval}")
+    logger.info(f"[pipeline] Route complete", extra={"needs_retrieval": needs_retrieval, "duration_ms": duration_route})
 
     if not needs_retrieval:
         # Direct answer path
