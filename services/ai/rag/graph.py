@@ -19,7 +19,7 @@ from rag.rewrite import rewrite_query
 from rag.rerank import rerank_documents
 from rag.generate import generate_answer, generate_direct_answer
 from rag.citations import extract_citations
-from rag.llm import create_groq_llm
+from rag.llm import create_llm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,13 +43,19 @@ async def _route_query(
     query: str,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> bool:
     """Decide if the query needs document retrieval."""
     logger.info(f"[route_query] Processing query: {query[:100]}")
     try:
-        llm = create_groq_llm(
+        llm = create_llm(
             groq_api_key=groq_api_key,
             llm_model=llm_model,
+            llm_provider=llm_provider,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
             temperature=0,
             max_tokens=50,
         )
@@ -106,6 +112,9 @@ async def run_rag_pipeline(
     has_documents: bool = False,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Execute the full agentic RAG pipeline with streaming.
@@ -131,6 +140,9 @@ async def run_rag_pipeline(
                 query,
                 groq_api_key=groq_api_key,
                 llm_model=llm_model,
+                llm_provider=llm_provider,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
             )
     except Exception as e:
         logger.error(f"[pipeline] Route failed: {e}")
@@ -152,6 +164,9 @@ async def run_rag_pipeline(
             query,
             groq_api_key=groq_api_key,
             llm_model=llm_model,
+            llm_provider=llm_provider,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
         ):
             yield {"type": "token", "content": token}
         return
@@ -222,6 +237,9 @@ async def run_rag_pipeline(
                 documents,
                 groq_api_key=groq_api_key,
                 llm_model=llm_model,
+                llm_provider=llm_provider,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
             )
         except Exception as e:
             logger.error(f"[pipeline] Grade failed: {e}")
@@ -245,6 +263,9 @@ async def run_rag_pipeline(
                     current_query,
                     groq_api_key=groq_api_key,
                     llm_model=llm_model,
+                    llm_provider=llm_provider,
+                    openai_base_url=openai_base_url,
+                    openai_api_key=openai_api_key,
                 )
             except Exception as e:
                 logger.error(f"[pipeline] Rewrite failed: {e}")
@@ -272,6 +293,9 @@ async def run_rag_pipeline(
             relevant_docs,
             groq_api_key=groq_api_key,
             llm_model=llm_model,
+            llm_provider=llm_provider,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
         ):
             full_answer += token
             yield {"type": "token", "content": token}

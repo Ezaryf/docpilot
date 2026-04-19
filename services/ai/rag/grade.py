@@ -2,10 +2,9 @@
 Relevance grading: decide if retrieved documents are relevant to the query.
 """
 
-import os
 import re
 import logging
-from rag.llm import create_groq_llm
+from rag.llm import create_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -70,6 +69,9 @@ async def grade_relevance(
     rerank_score: float | None = None,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> bool:
     """Grade whether a document chunk is relevant to the query."""
     logger.debug(f"[grade_relevance] Grading document for query: {query[:60]}")
@@ -86,9 +88,12 @@ async def grade_relevance(
         logger.debug("[grade_relevance] Accepted via lexical overlap")
         return True
 
-    llm = create_groq_llm(
+    llm = create_llm(
         groq_api_key=groq_api_key,
         llm_model=llm_model,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
         temperature=0,
         max_tokens=100,
     )
@@ -120,6 +125,9 @@ async def grade_documents(
     documents: list,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> tuple[list, list]:
     """Grade a list of documents and split into relevant/irrelevant."""
     logger.info(f"[grade_documents] Grading {len(documents)} documents")
@@ -136,6 +144,9 @@ async def grade_documents(
                 rerank_score=rerank_score,
                 groq_api_key=groq_api_key,
                 llm_model=llm_model,
+                llm_provider=llm_provider,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
             )
         except Exception as e:
             logger.error(f"[grade_documents] Failed to grade doc {i}: {e}")

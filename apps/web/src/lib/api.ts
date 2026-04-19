@@ -1,4 +1,5 @@
-import type { Message, Citation, TraceStep } from "@/stores/chat-store";
+import type { Citation, TraceStep } from "@/stores/chat-store";
+import type { LlmRequestConfig } from "@/lib/settings";
 
 const AI_SERVICE_URL = process.env.NEXT_PUBLIC_AI_SERVICE_URL || "http://localhost:8000";
 
@@ -28,8 +29,7 @@ export async function streamChat(
   sessionId: string,
   documentNames: string[],
   hasDocuments: boolean,
-  groqApiKey: string | null,
-  llmModel: string | null,
+  llmConfig: LlmRequestConfig,
   callbacks: StreamCallbacks,
   signal?: AbortSignal
 ) {
@@ -42,8 +42,11 @@ export async function streamChat(
         session_id: sessionId,
         document_names: documentNames,
         has_documents: hasDocuments,
-        groq_api_key: groqApiKey,
-        llm_model: llmModel,
+        llm_provider: llmConfig.provider,
+        llm_model: llmConfig.model,
+        groq_api_key: llmConfig.groqApiKey,
+        openai_base_url: llmConfig.openaiBaseUrl,
+        openai_api_key: llmConfig.openaiApiKey,
       }),
       signal,
     });
@@ -104,6 +107,26 @@ export async function streamChat(
     if (error.name === "AbortError") return;
     callbacks.onError(error.message || "Stream failed");
   }
+}
+
+export async function runEvaluation(llmConfig: LlmRequestConfig) {
+  const res = await fetch(`${AI_SERVICE_URL}/api/eval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      llm_provider: llmConfig.provider,
+      llm_model: llmConfig.model,
+      groq_api_key: llmConfig.groqApiKey,
+      openai_base_url: llmConfig.openaiBaseUrl,
+      openai_api_key: llmConfig.openaiApiKey,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Evaluation request failed with HTTP ${res.status}`);
+  }
+
+  return res.json();
 }
 
 export async function uploadDocument(file: File): Promise<UploadResponse> {

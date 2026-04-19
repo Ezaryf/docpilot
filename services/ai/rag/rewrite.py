@@ -2,9 +2,8 @@
 Query rewriting: reformulate queries for better retrieval.
 """
 
-import os
 import logging
-from rag.llm import create_groq_llm
+from rag.llm import create_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -13,12 +12,18 @@ async def rewrite_query(
     original_query: str,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> str:
     """Rewrite a query to improve retrieval results."""
     logger.info(f"[rewrite_query] Rewriting query: {original_query[:60]}")
-    llm = create_groq_llm(
+    llm = create_llm(
         groq_api_key=groq_api_key,
         llm_model=llm_model,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
         temperature=0.3,
         max_tokens=200,
     )

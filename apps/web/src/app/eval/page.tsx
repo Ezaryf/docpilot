@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Sidebar } from "@/components/sidebar";
+import { runEvaluation } from "@/lib/api";
+import { getLlmRequestConfig, readStoredSettings } from "@/lib/settings";
 
 interface Metric {
   label: string;
@@ -74,19 +76,14 @@ export default function EvalPage() {
   const [running, setRunning] = useState(false);
   const [liveMetrics, setLiveMetrics] = useState(metrics);
   const [error, setError] = useState<string | null>(null);
+  const [rateLimitHint, setRateLimitHint] = useState(false);
 
   const runEval = async () => {
     setRunning(true);
     setError(null);
+    setRateLimitHint(false);
     try {
-      const AI_URL = process.env.NEXT_PUBLIC_AI_SERVICE_URL || "http://localhost:8000";
-      const res = await fetch(`${AI_URL}/api/eval`, { method: "POST" });
-
-      if (!res.ok) {
-        throw new Error(`Evaluation request failed with HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
+      const data = await runEvaluation(getLlmRequestConfig(readStoredSettings()));
       if (data.error) {
         throw new Error(data.error);
       }
@@ -112,7 +109,9 @@ export default function EvalPage() {
       }
     } catch (err) {
       console.error("Eval failed:", err);
-      setError(err instanceof Error ? err.message : "Evaluation failed.");
+      const message = err instanceof Error ? err.message : "Evaluation failed.";
+      setError(message);
+      setRateLimitHint(message.toLowerCase().includes("rate limit"));
     } finally {
       setRunning(false);
     }
@@ -179,6 +178,11 @@ export default function EvalPage() {
                 <div>
                   <h3 className="text-sm font-semibold text-error">Evaluation failed</h3>
                   <p className="text-sm text-text-secondary mt-1">{error}</p>
+                  {rateLimitHint ? (
+                    <p className="text-xs text-text-tertiary mt-3">
+                      Tip: switch Settings to Groq&apos;s LLaMA 3.1 8B Instant model or use a local vLLM/OpenAI-compatible provider to avoid Groq daily token limits.
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>

@@ -10,7 +10,7 @@ import { FileUploadPanel } from "@/components/file-upload";
 import { useChatStore } from "@/stores/chat-store";
 import { useDocumentStore } from "@/stores/document-store";
 import { streamChat } from "@/lib/api";
-import { getActiveGroqKey, readStoredSettings } from "@/lib/settings";
+import { getLlmRequestConfig, readStoredSettings } from "@/lib/settings";
 import type { Citation, TraceStep } from "@/stores/chat-store";
 
 export default function ChatPage() {
@@ -34,7 +34,7 @@ export default function ChatPage() {
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const readyDocuments = documents.filter((doc) => doc.status === "ready");
-  const activeGroqKey = getActiveGroqKey(chatSettings);
+  const llmConfig = getLlmRequestConfig(chatSettings);
 
   useEffect(() => {
     setChatSettings(readStoredSettings());
@@ -78,8 +78,7 @@ export default function ChatPage() {
         sessionId,
         focusedDocumentNames,
         readyDocuments.length > 0,
-        activeGroqKey?.apiKey ?? null,
-        chatSettings.llmModel || null,
+        llmConfig,
         {
           onToken: (token: string) => {
             contentRef.current += token;
@@ -111,8 +110,7 @@ export default function ChatPage() {
       setIsStreaming,
       focusedDocumentNames,
       readyDocuments.length,
-      activeGroqKey?.apiKey,
-      chatSettings.llmModel,
+      llmConfig,
     ]
   );
 

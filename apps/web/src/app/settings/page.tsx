@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Settings as SettingsIcon,
@@ -9,13 +9,14 @@ import {
   Cpu,
   Save,
   CheckCircle2,
-  Plus,
-  Trash2,
+  Server,
+  Cloud,
 } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import {
+  GROQ_MODELS,
   type AppSettings,
-  getActiveGroqKey,
+  getProviderLabel,
   maskApiKey,
   readStoredSettings,
   saveStoredSettings,
@@ -23,15 +24,11 @@ import {
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(() => readStoredSettings());
-  const [draftGroqLabel, setDraftGroqLabel] = useState("");
-  const [draftGroqKey, setDraftGroqKey] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setSettings(readStoredSettings());
   }, []);
-
-  const activeGroqKey = getActiveGroqKey(settings);
 
   const handleSave = () => {
     saveStoredSettings(settings);
@@ -39,23 +36,12 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const handleAddGroqKey = () => {
-    if (!draftGroqKey.trim()) return;
-
-    const nextKey = {
-      id: crypto.randomUUID(),
-      label: draftGroqLabel.trim() || `Groq Key ${settings.groqKeys.length + 1}`,
-      apiKey: draftGroqKey.trim(),
-    };
-
-    setSettings((current) => ({
-      ...current,
-      groqKeys: [...current.groqKeys, nextKey],
-      activeGroqKeyId: current.activeGroqKeyId ?? nextKey.id,
-    }));
-    setDraftGroqLabel("");
-    setDraftGroqKey("");
-  };
+  const activeCredential =
+    settings.provider === "groq"
+      ? maskApiKey(settings.groq.apiKey)
+      : settings.openaiCompatible.apiKey
+      ? maskApiKey(settings.openaiCompatible.apiKey)
+      : "no API key required";
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -71,146 +57,223 @@ export default function SettingsPage() {
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            className="rounded-xl border border-border bg-surface p-6"
+            className="rounded-xl border border-accent/20 bg-accent/5 px-5 py-4"
           >
-            <div className="flex items-center gap-2 mb-5">
-              <Key className="w-4 h-4 text-accent" />
-              <h2 className="text-sm font-semibold text-text-primary">Groq API Keys</h2>
-            </div>
-
-            <div className="rounded-xl border border-accent/20 bg-accent/5 px-4 py-3 mb-4">
-              <p className="text-sm font-medium text-text-primary">
-                Active key: {activeGroqKey?.label || "Backend default"}
-              </p>
-              <p className="text-xs text-text-secondary mt-1">
-                {activeGroqKey
-                  ? `Chat will use ${maskApiKey(activeGroqKey.apiKey)} with model ${settings.llmModel}.`
-                  : "If no key is selected here, DocPilot falls back to the backend .env Groq key."}
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {settings.groqKeys.map((entry) => {
-                const isActive = entry.id === settings.activeGroqKeyId;
-                return (
-                  <div
-                    key={entry.id}
-                    className={`rounded-xl border px-4 py-3 ${
-                      isActive ? "border-accent/40 bg-accent/5" : "border-border bg-surface-2/60"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-text-primary truncate">{entry.label}</p>
-                        <p className="text-xs text-text-tertiary mt-1">{maskApiKey(entry.apiKey)}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSettings((current) => ({ ...current, activeGroqKeyId: entry.id }))
-                          }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            isActive
-                              ? "bg-accent text-white"
-                              : "border border-border text-text-secondary hover:text-text-primary hover:bg-surface"
-                          }`}
-                        >
-                          {isActive ? "Active" : "Use this key"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSettings((current) => {
-                              const nextGroqKeys = current.groqKeys.filter((item) => item.id !== entry.id);
-                              return {
-                                ...current,
-                                groqKeys: nextGroqKeys,
-                                activeGroqKeyId:
-                                  current.activeGroqKeyId === entry.id ? nextGroqKeys[0]?.id ?? null : current.activeGroqKeyId,
-                              };
-                            })
-                          }
-                          className="p-2 rounded-lg text-text-tertiary hover:text-error hover:bg-surface transition-colors"
-                          aria-label={`Delete ${entry.label}`}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              <div className="rounded-xl border border-dashed border-border px-4 py-4 space-y-3">
-                <p className="text-sm font-medium text-text-primary">Add another Groq key</p>
-                <input
-                  type="text"
-                  value={draftGroqLabel}
-                  onChange={(e) => setDraftGroqLabel(e.target.value)}
-                  placeholder="Label, e.g. Personal Groq"
-                  className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
-                    placeholder-text-tertiary focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
-                    transition-all duration-200"
-                />
-                <input
-                  type="password"
-                  value={draftGroqKey}
-                  onChange={(e) => setDraftGroqKey(e.target.value)}
-                  placeholder="gsk_..."
-                  className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
-                    placeholder-text-tertiary focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
-                    transition-all duration-200"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddGroqKey}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-surface-2 transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add key
-                </button>
-              </div>
-            </div>
+            <p className="text-sm font-semibold text-text-primary">
+              Active provider: {getProviderLabel(settings.provider)}
+            </p>
+            <p className="text-xs text-text-secondary mt-1">
+              Chat and evaluation will use {settings.model} with {activeCredential}.
+            </p>
           </motion.div>
 
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.08 }}
+            transition={{ delay: 0.04 }}
             className="rounded-xl border border-border bg-surface p-6"
           >
             <div className="flex items-center gap-2 mb-5">
               <Cpu className="w-4 h-4 text-accent" />
-              <h2 className="text-sm font-semibold text-text-primary">Model Configuration</h2>
+              <h2 className="text-sm font-semibold text-text-primary">AI Provider</h2>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                Groq model
-              </label>
-              <select
-                value={settings.llmModel}
-                onChange={(e) => setSettings((current) => ({ ...current, llmModel: e.target.value }))}
-                className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
-                  focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
-                  transition-all duration-200"
-              >
-                <option value="llama-3.3-70b-versatile">LLaMA 3.3 70B (Versatile)</option>
-                <option value="llama-3.1-8b-instant">LLaMA 3.1 8B (Instant)</option>
-                <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
-                <option value="gemma2-9b-it">Gemma 2 9B</option>
-              </select>
-              <p className="text-[11px] text-text-tertiary mt-2">
-                Lower-cost models can help when a stronger model hits daily token limits.
-              </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {[
+                {
+                  id: "groq" as const,
+                  title: "Groq Cloud",
+                  description: "Fast hosted inference. Best when you have Groq quota available.",
+                  icon: Cloud,
+                },
+                {
+                  id: "openai-compatible" as const,
+                  title: "Local vLLM / OpenAI-compatible",
+                  description: "Use a local server or any API that exposes /v1 chat completions.",
+                  icon: Server,
+                },
+              ].map((provider) => {
+                const Icon = provider.icon;
+                const active = settings.provider === provider.id;
+                return (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    onClick={() =>
+                      setSettings((current) => ({
+                        ...current,
+                        provider: provider.id,
+                        model:
+                          provider.id === "groq" && current.model.startsWith("google/")
+                            ? GROQ_MODELS[0].value
+                            : current.model,
+                      }))
+                    }
+                    className={`text-left rounded-xl border p-4 transition-colors ${
+                      active
+                        ? "border-accent/50 bg-accent/10"
+                        : "border-border bg-surface-2/60 hover:bg-surface-2"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon className={active ? "w-4 h-4 text-accent" : "w-4 h-4 text-text-tertiary"} />
+                      <span className="text-sm font-semibold text-text-primary">{provider.title}</span>
+                    </div>
+                    <p className="text-xs text-text-secondary leading-relaxed">{provider.description}</p>
+                  </button>
+                );
+              })}
             </div>
           </motion.div>
+
+          {settings.provider === "groq" ? (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+              className="rounded-xl border border-border bg-surface p-6"
+            >
+              <div className="flex items-center gap-2 mb-5">
+                <Key className="w-4 h-4 text-accent" />
+                <h2 className="text-sm font-semibold text-text-primary">Groq Cloud</h2>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                    Groq API key
+                  </label>
+                  <input
+                    type="password"
+                    value={settings.groq.apiKey}
+                    onChange={(e) =>
+                      setSettings((current) => ({
+                        ...current,
+                        groq: { ...current.groq, apiKey: e.target.value },
+                      }))
+                    }
+                    placeholder="gsk_..."
+                    className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
+                      placeholder-text-tertiary focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
+                      transition-all duration-200"
+                  />
+                  <p className="text-[11px] text-text-tertiary mt-2">
+                    If left blank, the backend .env Groq key will be used.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                    Groq model
+                  </label>
+                  <select
+                    value={settings.model}
+                    onChange={(e) => setSettings((current) => ({ ...current, model: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
+                      focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
+                      transition-all duration-200"
+                  >
+                    {GROQ_MODELS.map((model) => (
+                      <option key={model.value} value={model.value}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-text-tertiary mt-2">
+                    Use 8B Instant when the 70B model hits daily token limits.
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+              className="rounded-xl border border-border bg-surface p-6"
+            >
+              <div className="flex items-center gap-2 mb-5">
+                <Server className="w-4 h-4 text-accent" />
+                <h2 className="text-sm font-semibold text-text-primary">
+                  Local vLLM / OpenAI-compatible
+                </h2>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                    Base URL
+                  </label>
+                  <input
+                    type="url"
+                    value={settings.openaiCompatible.baseUrl}
+                    onChange={(e) =>
+                      setSettings((current) => ({
+                        ...current,
+                        openaiCompatible: {
+                          ...current.openaiCompatible,
+                          baseUrl: e.target.value,
+                        },
+                      }))
+                    }
+                    placeholder="http://localhost:8001/v1"
+                    className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
+                      placeholder-text-tertiary focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
+                      transition-all duration-200"
+                  />
+                  <p className="text-[11px] text-text-tertiary mt-2">
+                    Docker users may need http://host.docker.internal:8001/v1.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                    Model name
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.model}
+                    onChange={(e) => setSettings((current) => ({ ...current, model: e.target.value }))}
+                    placeholder="google/gemma-..."
+                    className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
+                      placeholder-text-tertiary focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
+                      transition-all duration-200"
+                  />
+                  <p className="text-[11px] text-text-tertiary mt-2">
+                    Enter the exact model ID served by vLLM, for example a Gemma model name.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                    API key (optional)
+                  </label>
+                  <input
+                    type="password"
+                    value={settings.openaiCompatible.apiKey}
+                    onChange={(e) =>
+                      setSettings((current) => ({
+                        ...current,
+                        openaiCompatible: {
+                          ...current.openaiCompatible,
+                          apiKey: e.target.value,
+                        },
+                      }))
+                    }
+                    placeholder="Leave blank for local vLLM"
+                    className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border text-sm text-text-primary
+                      placeholder-text-tertiary focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20
+                      transition-all duration-200"
+                  />
+                </div>
+              </div>
+            </motion.div>
+          )}
 
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.16 }}
+            transition={{ delay: 0.12 }}
             className="rounded-xl border border-border bg-surface p-6"
           >
             <div className="flex items-center gap-2 mb-5">
@@ -219,7 +282,7 @@ export default function SettingsPage() {
             </div>
 
             <p className="text-sm text-text-secondary leading-relaxed">
-              Qdrant fields here are still informational only. The chat flow now uses the active Groq key and model from this page, but Qdrant connection settings still come from the backend environment.
+              Qdrant connection settings still come from the backend environment. This page now controls the chat and evaluation LLM provider only.
             </p>
           </motion.div>
 

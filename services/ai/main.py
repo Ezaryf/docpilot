@@ -62,6 +62,9 @@ class ChatRequest(BaseModel):
     has_documents: bool = False
     groq_api_key: str | None = None
     llm_model: str | None = None
+    llm_provider: str | None = None
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None
 
 
 class HealthResponse(BaseModel):
@@ -87,19 +90,25 @@ async def _stream_rag(
     has_documents: bool,
     groq_api_key: str | None,
     llm_model: str | None,
+    llm_provider: str | None,
+    openai_base_url: str | None,
+    openai_api_key: str | None,
 ) -> AsyncGenerator[str, None]:
     """Run the RAG pipeline and yield SSE events."""
     logger.info(
-        f"[chat] Session: {session_id}, Query: {query[:80]}, Documents: {document_names or 'all'}, HasDocuments: {has_documents}, Model: {llm_model or 'env-default'}"
+        f"[chat] Session: {session_id}, Query: {query[:80]}, Documents: {document_names or 'all'}, HasDocuments: {has_documents}, Provider: {llm_provider or 'groq'}, Model: {llm_model or 'env-default'}"
     )
     try:
         async for event in run_rag_pipeline(
-            query,
-            session_id,
-            document_names,
-            has_documents,
-            groq_api_key,
-            llm_model,
+            query=query,
+            session_id=session_id,
+            document_names=document_names,
+            has_documents=has_documents,
+            groq_api_key=groq_api_key,
+            llm_model=llm_model,
+            llm_provider=llm_provider,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
         ):
             yield f"data: {json.dumps(event)}\n\n"
         yield "data: [DONE]\n\n"
@@ -125,6 +134,9 @@ async def chat(req: ChatRequest):
             req.has_documents,
             req.groq_api_key,
             req.llm_model,
+            req.llm_provider,
+            req.openai_base_url,
+            req.openai_api_key,
         ),
         media_type="text/event-stream",
         headers={
@@ -211,11 +223,25 @@ async def run_evaluation(request: Optional[dict] = None):
     from rag.eval import evaluate_rag, run_batch_evaluation
     from rag.retrieve import get_collection_info
 
+    request = request or {}
+    llm_provider = request.get("llm_provider")
+    llm_model = request.get("llm_model")
+    groq_api_key = request.get("groq_api_key")
+    openai_base_url = request.get("openai_base_url")
+    openai_api_key = request.get("openai_api_key")
+
     # 1. Check if it's a batch request (no body)
-    if not request:
-        logger.info("[eval] Triggering batch evaluation")
+    if not request.get("question") and not request.get("answer"):
+        logger.info(f"[eval] Triggering batch evaluation with provider={llm_provider or 'groq'}, model={llm_model or 'env-default'}")
         try:
-            return await run_batch_evaluation(num_samples=3)
+            return await run_batch_evaluation(
+                num_samples=3,
+                groq_api_key=groq_api_key,
+                llm_model=llm_model,
+                llm_provider=llm_provider,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
+            )
         except Exception as e:
             logger.error(f"[eval] Batch evaluation failed: {e}")
             return {"error": str(e)}
@@ -239,6 +265,11 @@ async def run_evaluation(request: Optional[dict] = None):
             answer=answer,
             contexts=contexts,
             ground_truth=ground_truth,
+            groq_api_key=groq_api_key,
+            llm_model=llm_model,
+            llm_provider=llm_provider,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
         )
         return {
             "results": [{
@@ -271,6 +302,7 @@ async def get_stats():
             },
             "environment": {
                 "hybrid_search": os.getenv("HYBRID_SEARCH", "false"),
+                "llm_provider": os.getenv("LLM_PROVIDER", "groq"),
                 "llm_model": os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
             }
         }

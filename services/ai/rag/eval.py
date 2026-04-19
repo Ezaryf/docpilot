@@ -17,6 +17,7 @@ DEFAULT_GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 DEFAULT_LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
 _metrics_initialized = False
+_metrics_config_key = None
 _faithfulness = None
 _answer_relevancy = None
 _context_recall = None
@@ -77,14 +78,25 @@ def serialize_evaluation_result(eval_result: Any) -> Dict[str, List[float]]:
 def _init_metrics(
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> None:
     """Initialize Ragas metrics with LLM configuration."""
-    global _metrics_initialized, _faithfulness, _answer_relevancy, _context_recall, _context_precision
+    global _metrics_initialized, _metrics_config_key, _faithfulness, _answer_relevancy, _context_recall, _context_precision
 
-    if _metrics_initialized:
+    config_key = (
+        llm_provider or "groq",
+        llm_model or DEFAULT_LLM_MODEL,
+        groq_api_key or "",
+        openai_base_url or "",
+        openai_api_key or "",
+    )
+
+    if _metrics_initialized and _metrics_config_key == config_key:
         return
 
-    from rag.llm import create_groq_llm
+    from rag.llm import create_llm
     from rag.retrieve import EMBED_MODEL
     from langchain_community.embeddings import HuggingFaceEmbeddings
     from ragas.llms import LangchainLLMWrapper
@@ -93,12 +105,15 @@ def _init_metrics(
     api_key = groq_api_key or DEFAULT_GROQ_API_KEY
     model = llm_model or DEFAULT_LLM_MODEL
 
-    logger.info(f"[eval] Initializing Ragas metrics with model: {model}")
+    logger.info(f"[eval] Initializing Ragas metrics with provider={llm_provider or 'groq'}, model={model}")
 
     # Wrap Langchain models for Ragas 0.4.3+
-    chat_llm = create_groq_llm(
+    chat_llm = create_llm(
         groq_api_key=api_key,
         llm_model=model,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
         temperature=0.0,
         max_tokens=2048,
     )
@@ -122,6 +137,7 @@ def _init_metrics(
     )
 
     _metrics_initialized = True
+    _metrics_config_key = config_key
     logger.info("[eval] Ragas metrics initialized")
 
 
@@ -132,6 +148,9 @@ async def evaluate_rag(
     ground_truth: str | None = None,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> Dict[str, Any]:
     """
     Evaluate RAG pipeline outputs using Ragas metrics.
@@ -149,7 +168,7 @@ async def evaluate_rag(
     """
     logger.info(f"[eval] Evaluating question: {question[:60]}...")
 
-    _init_metrics(groq_api_key, llm_model)
+    _init_metrics(groq_api_key, llm_model, llm_provider, openai_base_url, openai_api_key)
 
     eval_data = {
         "question": [question],
@@ -193,6 +212,9 @@ async def evaluate_from_response(
     ground_truth: str | None = None,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> Dict[str, Any]:
     """
     Evaluate from existing RAG response.
@@ -217,6 +239,9 @@ async def evaluate_from_response(
         ground_truth=ground_truth,
         groq_api_key=groq_api_key,
         llm_model=llm_model,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
     )
 
 async def generate_test_questions(
@@ -224,13 +249,19 @@ async def generate_test_questions(
     num_questions: int = 5,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> List[str]:
     """Generate potential user questions from context chunks for evaluation."""
-    from rag.llm import create_groq_llm
+    from rag.llm import create_llm
     
-    llm = create_groq_llm(
+    llm = create_llm(
         groq_api_key=groq_api_key or DEFAULT_GROQ_API_KEY, 
         llm_model=llm_model or DEFAULT_LLM_MODEL,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
         temperature=0.2,
         max_tokens=2048,
     )
@@ -259,6 +290,11 @@ Output format: ["question 1", "question 2", ...]"""
 
 async def run_batch_evaluation(
     num_samples: int = 3,
+    groq_api_key: str | None = None,
+    llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> Dict[str, Any]:
     """Run a full evaluation suite against indexed documents."""
     from rag.retrieve import _get_qdrant, COLLECTION
@@ -278,7 +314,15 @@ async def run_batch_evaluation(
         return {"error": "Failed to retrieve samples"}
 
     # 2. Generate questions
-    questions = await generate_test_questions(texts, num_questions=num_samples)
+    questions = await generate_test_questions(
+        texts,
+        num_questions=num_samples,
+        groq_api_key=groq_api_key,
+        llm_model=llm_model,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
+    )
     
     results = []
     total_hit_at_5 = 0
@@ -295,7 +339,16 @@ async def run_batch_evaluation(
             # We use the actual pipeline to get the trace and results
             # run_rag_pipeline returns an async generator yielding dicts
             output = {"answer": "", "documents": [], "trace": [], "citations": []}
-            async for chunk in run_rag_pipeline(q, session_id="eval-batch", has_documents=True):
+            async for chunk in run_rag_pipeline(
+                q,
+                session_id="eval-batch",
+                has_documents=True,
+                groq_api_key=groq_api_key,
+                llm_model=llm_model,
+                llm_provider=llm_provider,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
+            ):
                 if chunk["type"] == "token":
                     output["answer"] += chunk["content"]
                 elif chunk["type"] == "documents":
@@ -311,7 +364,12 @@ async def run_batch_evaluation(
             eval_scores = await evaluate_from_response(
                 question=q,
                 llm_answer=output["answer"],
-                retrieved_docs=output["documents"]
+                retrieved_docs=output["documents"],
+                groq_api_key=groq_api_key,
+                llm_model=llm_model,
+                llm_provider=llm_provider,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
             )
             
             # Score mappings

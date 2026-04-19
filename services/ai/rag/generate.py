@@ -2,10 +2,9 @@
 Grounded answer generation with citations.
 """
 
-import os
 import logging
 from typing import List, Dict, AsyncGenerator
-from rag.llm import create_groq_llm
+from rag.llm import create_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -25,15 +24,21 @@ async def generate_answer(
     documents: List[Dict],
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate a grounded answer with streaming."""
     logger.info(f"[generate] Starting answer generation, documents: {len(documents)}")
     if not documents:
         logger.warning("[generate] No documents provided, generating fallback response")
 
-    llm = create_groq_llm(
+    llm = create_llm(
         groq_api_key=groq_api_key,
         llm_model=llm_model,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
         temperature=0.4,
         max_tokens=2048,
     )
@@ -81,11 +86,17 @@ async def generate_direct_answer(
     query: str,
     groq_api_key: str | None = None,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate a direct answer without retrieval (for non-retrieval queries)."""
-    llm = create_groq_llm(
+    llm = create_llm(
         groq_api_key=groq_api_key,
         llm_model=llm_model,
+        llm_provider=llm_provider,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
         temperature=0.4,
         max_tokens=2048,
     )
