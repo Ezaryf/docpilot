@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 
 from rag.ingest import ingest_document
 from rag.graph import run_rag_pipeline
+from rag.llm import diagnose_vllm_environment, format_llm_error, resolve_llm_config, test_llm_connection
+from rag.local_llm import (
+    get_local_model_status,
+    queue_local_model_apply,
+    remove_local_hf_token,
+    stop_local_model,
+)
 
 app = FastAPI(
     title="DocPilot AI Service",
@@ -65,6 +72,26 @@ class ChatRequest(BaseModel):
     llm_provider: str | None = None
     openai_base_url: str | None = None
     openai_api_key: str | None = None
+
+
+class LlmTestRequest(BaseModel):
+    groq_api_key: str | None = None
+    llm_model: str | None = None
+    llm_provider: str | None = None
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None
+
+
+class LlmEnvironmentRequest(BaseModel):
+    llm_model: str | None = None
+    openai_base_url: str | None = None
+    check_native_python: bool = False
+
+
+class LocalModelApplyRequest(BaseModel):
+    model: str
+    hf_token: str | None = None
+    gpu_memory_mode: str = "safe_10gb"
 
 
 class HealthResponse(BaseModel):
@@ -114,8 +141,16 @@ async def _stream_rag(
         yield "data: [DONE]\n\n"
         logger.info(f"[chat] Stream complete for session: {session_id}")
     except Exception as e:
-        logger.error(f"[chat] Stream error: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        config = resolve_llm_config(
+            groq_api_key=groq_api_key,
+            llm_model=llm_model,
+            llm_provider=llm_provider,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
+        )
+        message = format_llm_error(e, config)
+        logger.error(f"[chat] Stream error: {message}")
+        yield f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
         yield "data: [DONE]\n\n"
 
 
@@ -145,6 +180,78 @@ async def chat(req: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ──────────────────── LLM Connection Test ────────────────────
+
+
+@app.post("/api/llm/test")
+async def test_llm(req: LlmTestRequest):
+    logger.info(
+        f"[llm] Testing provider={req.llm_provider or 'groq'}, model={req.llm_model or 'env-default'}"
+    )
+    try:
+        return await test_llm_connection(
+            groq_api_key=req.groq_api_key,
+            llm_model=req.llm_model,
+            llm_provider=req.llm_provider,
+            openai_base_url=req.openai_base_url,
+            openai_api_key=req.openai_api_key,
+        )
+    except Exception as e:
+        logger.error(f"[llm] Test failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/llm/environment")
+async def check_llm_environment(req: LlmEnvironmentRequest):
+    logger.info(
+        f"[llm] Checking local vLLM runtime for model={req.llm_model or 'env-default'}"
+    )
+    try:
+        return diagnose_vllm_environment(
+            llm_model=req.llm_model,
+            openai_base_url=req.openai_base_url,
+            check_native_python=req.check_native_python,
+        )
+    except Exception as e:
+        logger.error(f"[llm] Environment check failed: {e}")
+        return {
+            "ok": False,
+            "status": "error",
+            "issue_code": "diagnostic_failed",
+            "title": "Local runtime check failed",
+            "message": "DocPilot could not complete the vLLM runtime diagnostic.",
+            "recommendation": "Check the backend logs, then try Test Connection after starting vLLM.",
+            "details": str(e),
+        }
+
+
+@app.post("/api/llm/local/apply")
+async def apply_local_model(req: LocalModelApplyRequest):
+    logger.info(f"[llm] Applying local model={req.model}")
+    return await queue_local_model_apply(
+        model=req.model,
+        hf_token=req.hf_token,
+        gpu_memory_mode=req.gpu_memory_mode,
+    )
+
+
+@app.get("/api/llm/local/status")
+async def local_model_status():
+    return get_local_model_status()
+
+
+@app.post("/api/llm/local/stop")
+async def stop_local_model_server():
+    logger.info("[llm] Stopping managed local model")
+    return await stop_local_model()
+
+
+@app.delete("/api/llm/local/token")
+async def delete_local_model_token():
+    logger.info("[llm] Removing saved Hugging Face token")
+    return await remove_local_hf_token()
 
 
 # ──────────────────── Upload ────────────────────

@@ -9,9 +9,45 @@ import { ChatInput } from "@/components/chat-input";
 import { FileUploadPanel } from "@/components/file-upload";
 import { useChatStore } from "@/stores/chat-store";
 import { useDocumentStore } from "@/stores/document-store";
-import { streamChat } from "@/lib/api";
-import { getLlmRequestConfig, readStoredSettings } from "@/lib/settings";
+import { applyLocalModel, getLocalModelStatus, streamChat, type LocalModelStatus } from "@/lib/api";
+import {
+  DEFAULT_SETTINGS,
+  getLlmRequestConfig,
+  normalizeOpenAiBaseUrl,
+  readStoredSettings,
+  saveStoredSettings,
+} from "@/lib/settings";
 import type { Citation, TraceStep } from "@/stores/chat-store";
+
+function isManagedLocalVllm(baseUrl: string) {
+  const normalized = normalizeOpenAiBaseUrl(baseUrl);
+  return /^https?:\/\/(localhost|127\.0\.0\.1):8001\/v1\b/i.test(normalized);
+}
+
+async function waitForLocalModel(model: string, onProgress: (status: LocalModelStatus) => void) {
+  let status = await getLocalModelStatus();
+  if (status.state === "ready" && (status.served_model === model || status.model === model)) {
+    onProgress(status);
+    return status;
+  }
+
+  status = await applyLocalModel({ model, gpuMemoryMode: "safe_10gb" });
+  for (let attempt = 0; attempt < 450; attempt += 1) {
+    onProgress(status);
+    if (status.state === "ready") return status;
+    if (status.state === "failed") return status;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    status = await getLocalModelStatus();
+  }
+
+  return {
+    ...status,
+    state: "failed" as const,
+    error_code: "local_model_timeout",
+    error_message: "Timed out waiting for the local model to become ready.",
+    progress_message: "Timed out waiting for the local model to become ready.",
+  };
+}
 
 export default function ChatPage() {
   const {
@@ -27,14 +63,13 @@ export default function ChatPage() {
   const focusedDocumentNames = useDocumentStore((state) => state.focusedDocumentNames);
 
   const [showUpload, setShowUpload] = useState(false);
-  const [chatSettings, setChatSettings] = useState(() => readStoredSettings());
+  const [chatSettings, setChatSettings] = useState(DEFAULT_SETTINGS);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const contentRef = useRef("");
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const readyDocuments = documents.filter((doc) => doc.status === "ready");
-  const llmConfig = getLlmRequestConfig(chatSettings);
 
   useEffect(() => {
     setChatSettings(readStoredSettings());
@@ -72,14 +107,63 @@ export default function ChatPage() {
       setIsStreaming(true);
       contentRef.current = "";
       abortRef.current = new AbortController();
+      const latestSettings = readStoredSettings();
+      setChatSettings(latestSettings);
+      let effectiveSettings = latestSettings;
+      let latestLlmConfig = getLlmRequestConfig(effectiveSettings);
+
+      if (
+        effectiveSettings.provider === "openai-compatible" &&
+        isManagedLocalVllm(effectiveSettings.openaiCompatible.baseUrl)
+      ) {
+        contentRef.current = "Starting local model...";
+        updateMessage(sessionId, assistantId, { content: contentRef.current });
+
+        const localStatus = await waitForLocalModel(effectiveSettings.model, (status) => {
+          contentRef.current = `Starting local model...\n\n${status.progress_message || status.state}`;
+          updateMessage(sessionId!, assistantId, { content: contentRef.current });
+        });
+
+        if (localStatus.state !== "ready") {
+          contentRef.current = `⚠️ ${
+            localStatus.error_message ||
+            localStatus.progress_message ||
+            "Local model startup failed. Open Settings to add a Hugging Face token or choose a smaller model."
+          }`;
+          updateMessage(sessionId, assistantId, { content: contentRef.current });
+          setIsStreaming(false);
+          return;
+        }
+
+        const readyModel = localStatus.served_model || localStatus.model || effectiveSettings.model;
+        effectiveSettings = {
+          ...effectiveSettings,
+          provider: "openai-compatible",
+          model: readyModel,
+          openaiCompatible: {
+            ...effectiveSettings.openaiCompatible,
+            baseUrl: normalizeOpenAiBaseUrl(localStatus.base_url || "http://localhost:8001/v1"),
+          },
+        };
+        saveStoredSettings(effectiveSettings);
+        setChatSettings(effectiveSettings);
+        latestLlmConfig = getLlmRequestConfig(effectiveSettings);
+        contentRef.current = "";
+        updateMessage(sessionId, assistantId, { content: "" });
+      }
 
       await streamChat(
         message,
         sessionId,
         focusedDocumentNames,
         readyDocuments.length > 0,
-        llmConfig,
+        latestLlmConfig,
         {
+          onStatus: (statusMessage: string) => {
+            if (!contentRef.current && statusMessage) {
+              updateMessage(sessionId!, assistantId, { content: statusMessage });
+            }
+          },
           onToken: (token: string) => {
             contentRef.current += token;
             updateMessage(sessionId!, assistantId, { content: contentRef.current });
@@ -94,7 +178,9 @@ export default function ChatPage() {
             setIsStreaming(false);
           },
           onError: (error: string) => {
-            contentRef.current += `\n\n⚠️ ${error}`;
+            contentRef.current = contentRef.current
+              ? `${contentRef.current}\n\n⚠️ ${error}`
+              : `⚠️ ${error}`;
             updateMessage(sessionId!, assistantId, { content: contentRef.current });
             setIsStreaming(false);
           },
@@ -110,7 +196,6 @@ export default function ChatPage() {
       setIsStreaming,
       focusedDocumentNames,
       readyDocuments.length,
-      llmConfig,
     ]
   );
 
@@ -127,7 +212,7 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <header className="h-14 flex items-center justify-between px-4 border-b border-border bg-surface/80 backdrop-blur-sm flex-shrink-0">
-          <div className="min-w-0">
+          <div className="min-w-0" title={`Model: ${chatSettings.model}`}>
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-accent" />
               <h1 className="text-sm font-semibold text-text-primary truncate">

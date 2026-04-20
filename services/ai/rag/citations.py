@@ -11,6 +11,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
+def _display_page(doc: Dict[str, Any]) -> int | None:
+    if doc.get("page") is not None:
+        try:
+            page = int(doc["page"])
+            return page if page > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    if doc.get("chunk_index") is not None:
+        try:
+            return int(doc["chunk_index"]) + 1
+        except (TypeError, ValueError):
+            return None
+
+    return None
+
+
 def extract_citations(
     answer: str, documents: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
@@ -32,7 +49,7 @@ def extract_citations(
                     "id": str(uuid.uuid4()),
                     "documentName": doc.get("document_name", "unknown"),
                     "chunkText": doc.get("text", "")[:300],
-                    "page": doc.get("chunk_index", 0),
+                    "page": _display_page(doc),
                     "score": doc.get("score", 0.0),
                 }
             )
@@ -46,7 +63,7 @@ def extract_citations(
                     "id": str(uuid.uuid4()),
                     "documentName": doc.get("document_name", "unknown"),
                     "chunkText": doc.get("text", "")[:300],
-                    "page": doc.get("chunk_index", 0),
+                    "page": _display_page(doc),
                     "score": doc.get("score", 0.0),
                 }
             )

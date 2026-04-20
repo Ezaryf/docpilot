@@ -17,9 +17,9 @@ from rag.retrieve import search_documents, search_hybrid, HYBRID_USE
 from rag.grade import grade_documents
 from rag.rewrite import rewrite_query
 from rag.rerank import rerank_documents
-from rag.generate import generate_answer, generate_direct_answer
+from rag.generate import build_extractive_fallback, generate_answer, generate_direct_answer
 from rag.citations import extract_citations
-from rag.llm import create_llm
+from rag.llm import create_llm, is_managed_local_vllm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -120,6 +120,7 @@ async def run_rag_pipeline(
     Execute the full agentic RAG pipeline with streaming.
     Yields SSE-compatible events:
       {"type": "token", "content": "..."}
+      {"type": "status", "message": "..."}
       {"type": "citations", "citations": [...]}
       {"type": "trace", "trace": [...]}
     """
@@ -127,6 +128,11 @@ async def run_rag_pipeline(
     document_names = document_names or []
     trace = []
     t0 = time.time()
+    local_fast_mode = is_managed_local_vllm(llm_provider, openai_base_url)
+    retrieve_top_k = 3 if local_fast_mode else 10
+    rerank_top_k = 2 if local_fast_mode else 5
+    if local_fast_mode:
+        logger.info("[pipeline] Local fast mode enabled")
 
     # ── Step 1: Route ──
     t_route = time.time()
@@ -159,6 +165,7 @@ async def run_rag_pipeline(
         # Direct answer path
         trace.append({"step": "direct_answer", "detail": "No retrieval needed"})
         yield {"type": "trace", "trace": trace}
+        yield {"type": "status", "message": "Generating answer..."}
 
         async for token in generate_direct_answer(
             query,
@@ -174,24 +181,25 @@ async def run_rag_pipeline(
     # ── Step 2: Retrieve ──
     current_query = query
     rewrite_count = 0
-    max_rewrites = 2
+    max_rewrites = 0 if local_fast_mode else 2
     relevant_docs = []
 
     logger.info(f"[pipeline] Step 2: Retrieve (max rewrites: {max_rewrites})")
     while rewrite_count <= max_rewrites:
         t_retrieve = time.time()
         logger.info(f"[pipeline] Retrieve attempt {rewrite_count + 1} for query: {current_query[:60]}")
+        yield {"type": "status", "message": "Searching documents..."}
         try:
             if HYBRID_USE:
                 documents = await search_hybrid(
                     current_query,
-                    top_k=10,
+                    top_k=retrieve_top_k,
                     document_names=document_names,
                 )
             else:
                 documents = await search_documents(
                     current_query,
-                    top_k=10,
+                    top_k=retrieve_top_k,
                     document_names=document_names,
                 )
         except Exception as e:
@@ -212,25 +220,37 @@ async def run_rag_pipeline(
         # ── Step 3: Rerank ──
         t_rerank = time.time()
         logger.info(f"[pipeline] Step 3: Rerank {len(documents)} documents")
+        yield {"type": "status", "message": "Reranking the best chunks..."}
         try:
             documents = await rerank_documents(
                 current_query,
                 documents,
-                top_k=5,
+                top_k=rerank_top_k,
             )
         except Exception as e:
             logger.error(f"[pipeline] Rerank failed: {e}")
             pass
         trace.append({
             "step": "rerank",
-            "detail": f"Reranked to top 5 from initial 10",
+            "detail": f"Reranked to top {rerank_top_k} from initial {retrieve_top_k}",
             "duration_ms": round((time.time() - t_rerank) * 1000),
         })
         logger.info(f"[pipeline] Rerank complete, {len(documents)} documents remain")
 
+        if local_fast_mode:
+            relevant_docs = documents[:rerank_top_k]
+            trace.append({
+                "step": "grade",
+                "detail": "Skipped for fast local mode; using top reranked chunks directly",
+                "duration_ms": 0,
+            })
+            logger.info(f"[pipeline] Local fast mode: using {len(relevant_docs)} documents without LLM grading")
+            break
+
         # ── Step 4: Grade ──
         t_grade = time.time()
         logger.info(f"[pipeline] Step 4: Grade {len(documents)} documents")
+        yield {"type": "status", "message": "Checking document relevance..."}
         try:
             relevant_docs, irrelevant = await grade_documents(
                 current_query,
@@ -281,11 +301,16 @@ async def run_rag_pipeline(
             break
 
     # Emit trace and final retrieval context before generation.
+    yield {"type": "status", "message": "Preparing answer..."}
     yield {"type": "trace", "trace": trace}
     yield {"type": "documents", "documents": relevant_docs}
 
     # ── Step 6: Generate ──
     logger.info(f"[pipeline] Step 6: Generate answer with {len(relevant_docs)} documents")
+    yield {
+        "type": "status",
+        "message": "Generating concise local answer..." if local_fast_mode else "Generating answer...",
+    }
     full_answer = ""
     try:
         async for token in generate_answer(
@@ -300,8 +325,12 @@ async def run_rag_pipeline(
             full_answer += token
             yield {"type": "token", "content": token}
     except Exception as e:
-        logger.error(f"[pipeline] Generate failed: {e}")
-        raise
+        logger.error(f"[pipeline] Generate failed: {repr(e)}")
+        if not local_fast_mode:
+            raise
+        yield {"type": "status", "message": "Local model was slow; using retrieved document snippets..."}
+        full_answer = build_extractive_fallback(relevant_docs, query=current_query)
+        yield {"type": "token", "content": full_answer}
     logger.info(f"[pipeline] Generate complete, length: {len(full_answer)} chars")
 
     # ── Step 7: Citations ──

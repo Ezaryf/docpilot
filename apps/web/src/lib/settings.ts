@@ -140,6 +140,12 @@ export function getProviderLabel(provider: LlmProvider) {
   return provider === "groq" ? "Groq Cloud" : "Local vLLM / OpenAI-compatible";
 }
 
+export function normalizeOpenAiBaseUrl(baseUrl: string) {
+  const trimmed = (baseUrl || DEFAULT_SETTINGS.openaiCompatible.baseUrl).trim().replace(/\/+$/, "");
+  if (!trimmed) return DEFAULT_SETTINGS.openaiCompatible.baseUrl;
+  return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+}
+
 export function maskApiKey(apiKey: string) {
   if (!apiKey) return "not set";
   if (apiKey.length <= 8) return "••••••••";

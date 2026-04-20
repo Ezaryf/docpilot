@@ -16,8 +16,84 @@ export interface IndexedDocument {
   total_chunks?: number;
 }
 
+export interface LlmEnvironmentDiagnostic {
+  ok: boolean;
+  status: string;
+  issue_code: string;
+  title: string;
+  message: string;
+  recommendation: string;
+  platform?: string;
+  python_version?: string;
+  is_windows?: boolean;
+  is_wsl?: boolean;
+  vllm_installed?: boolean;
+  vllm_import_ok?: boolean;
+  native_python_vllm_ok?: boolean;
+  native_python_vllm_details?: string;
+  server_reachable?: boolean;
+  server_status?: string;
+  server_details?: string;
+  served_models?: string[];
+  active_served_model?: string;
+  startup_error_kind?: string;
+  hf_token_available?: boolean;
+  hf_token_source?: string;
+  gated_model_likely?: boolean;
+  hf_token_recommendation?: string;
+  gpu_memory_mode?: string;
+  gpu_memory_utilization?: string;
+  max_model_len?: string;
+  gpu_memory_snapshot?: string;
+  base_url?: string;
+  model?: string;
+  setup_command?: string;
+  docker_command?: string;
+  docker_hint?: string;
+  recommended_action?: string;
+  wsl_available?: boolean;
+  wsl_status?: string;
+  wsl_details?: string;
+  docker_available?: boolean;
+  docker_running?: boolean;
+  docker_status?: string;
+  docker_details?: string;
+  gpu_available?: boolean;
+  gpu_details?: string;
+  details?: string;
+}
+
+export type LocalModelState =
+  | "idle"
+  | "checking_docker"
+  | "starting_docker"
+  | "starting_container"
+  | "loading_model"
+  | "ready"
+  | "failed";
+
+export interface LocalModelStatus {
+  state: LocalModelState;
+  model: string;
+  served_model: string;
+  base_url: string;
+  container_name: string;
+  progress_message: string;
+  error_code: string;
+  error_message: string;
+  logs_tail: string;
+  hf_token_available: boolean;
+}
+
+export interface ApplyLocalModelRequest {
+  model: string;
+  hfToken?: string;
+  gpuMemoryMode?: "safe_10gb" | "balanced" | "max_context";
+}
+
 export interface StreamCallbacks {
   onToken: (token: string) => void;
+  onStatus?: (message: string) => void;
   onCitations: (citations: Citation[]) => void;
   onTrace: (trace: TraceStep[]) => void;
   onDone: () => void;
@@ -88,6 +164,8 @@ export async function streamChat(
 
           if (parsed.type === "token") {
             callbacks.onToken(parsed.content);
+          } else if (parsed.type === "status") {
+            callbacks.onStatus?.(parsed.message || parsed.content || "");
           } else if (parsed.type === "citations") {
             callbacks.onCitations(parsed.citations);
           } else if (parsed.type === "trace") {
@@ -124,6 +202,96 @@ export async function runEvaluation(llmConfig: LlmRequestConfig) {
 
   if (!res.ok) {
     throw new Error(`Evaluation request failed with HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function testLlmConnection(llmConfig: LlmRequestConfig) {
+  const res = await fetch(`${AI_SERVICE_URL}/api/llm/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      llm_provider: llmConfig.provider,
+      llm_model: llmConfig.model,
+      groq_api_key: llmConfig.groqApiKey,
+      openai_base_url: llmConfig.openaiBaseUrl,
+      openai_api_key: llmConfig.openaiApiKey,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Connection test failed with HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function checkLlmEnvironment(llmConfig: LlmRequestConfig): Promise<LlmEnvironmentDiagnostic> {
+  const res = await fetch(`${AI_SERVICE_URL}/api/llm/environment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      llm_model: llmConfig.model,
+      openai_base_url: llmConfig.openaiBaseUrl,
+      check_native_python: false,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Runtime check failed with HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function applyLocalModel(request: ApplyLocalModelRequest): Promise<LocalModelStatus> {
+  const res = await fetch(`${AI_SERVICE_URL}/api/llm/local/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: request.model,
+      hf_token: request.hfToken || null,
+      gpu_memory_mode: request.gpuMemoryMode || "safe_10gb",
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Local model request failed with HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getLocalModelStatus(): Promise<LocalModelStatus> {
+  const res = await fetch(`${AI_SERVICE_URL}/api/llm/local/status`);
+
+  if (!res.ok) {
+    throw new Error(`Local model status failed with HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function stopLocalModel(): Promise<LocalModelStatus> {
+  const res = await fetch(`${AI_SERVICE_URL}/api/llm/local/stop`, {
+    method: "POST",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Stop local model failed with HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function deleteLocalModelToken(): Promise<LocalModelStatus> {
+  const res = await fetch(`${AI_SERVICE_URL}/api/llm/local/token`, {
+    method: "DELETE",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Delete local token failed with HTTP ${res.status}`);
   }
 
   return res.json();
